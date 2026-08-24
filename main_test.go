@@ -48,6 +48,35 @@ func TestParseConfigRejectsLegacyProvidersField(t *testing.T) {
 	}
 }
 
+func TestPluginRegisterReturnsMetadataForLegacyConfig(t *testing.T) {
+	manager = newQueueManager()
+	configRaw, err := json.Marshal(lifecycleRequest{
+		SchemaVersion: pluginabi.SchemaVersion,
+		ConfigYAML:    []byte("providers:\n  codex: {}\n"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := handleMethod(pluginabi.MethodPluginRegister, configRaw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response envelope
+	if err := json.Unmarshal(raw, &response); err != nil {
+		t.Fatal(err)
+	}
+	if !response.OK {
+		t.Fatalf("registration failed: %s", response.Error.Message)
+	}
+	var registered registration
+	if err := json.Unmarshal(response.Result, &registered); err != nil {
+		t.Fatal(err)
+	}
+	if len(registered.Metadata.ConfigFields) == 0 {
+		t.Fatal("registration returned no config fields")
+	}
+}
+
 func TestPluginRPCAdmitsSelectedCredentialAndReleasesOnCompletion(t *testing.T) {
 	manager = newQueueManager()
 	configRaw, err := json.Marshal(lifecycleRequest{

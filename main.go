@@ -115,7 +115,15 @@ func cliproxyPluginShutdown() { manager = newQueueManager() }
 
 func handleMethod(method string, raw []byte) ([]byte, error) {
 	switch method {
-	case pluginabi.MethodPluginRegister, pluginabi.MethodPluginReconfigure:
+	case pluginabi.MethodPluginRegister:
+		// Registration metadata must remain available when an existing config
+		// needs migration; otherwise the host hides ConfigFields behind a
+		// generic invalid-plugin result.
+		if err := configure(raw); err != nil && !isLegacyConfigError(err) {
+			return nil, err
+		}
+		return okEnvelope(pluginRegistration())
+	case pluginabi.MethodPluginReconfigure:
 		if err := configure(raw); err != nil {
 			return nil, err
 		}
@@ -131,6 +139,10 @@ func handleMethod(method string, raw []byte) ([]byte, error) {
 	default:
 		return errorEnvelope("unknown_method", "unknown method: "+method), nil
 	}
+}
+
+func isLegacyConfigError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "field providers not found")
 }
 
 func configure(raw []byte) error {
