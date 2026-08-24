@@ -44,6 +44,13 @@ type lifecycleRequest struct {
 	ConfigYAML    []byte `json:"config_yaml"`
 	SchemaVersion uint32 `json:"schema_version"`
 }
+
+type pluginConfig struct {
+	Providers map[string]providerPolicy `yaml:"providers"`
+	Codex     *providerPolicy           `yaml:"codex"`
+	Claude    *providerPolicy           `yaml:"claude"`
+}
+
 type registration struct {
 	SchemaVersion uint32                   `json:"schema_version"`
 	Metadata      pluginapi.Metadata       `json:"metadata"`
@@ -132,22 +139,42 @@ func configure(raw []byte) error {
 	if req.SchemaVersion < 2 {
 		return fmt.Errorf("request lifecycle plugin requires host schema version 2 or newer")
 	}
-	var cfg struct {
-		Providers map[string]providerPolicy `yaml:"providers"`
+	policies, err := parseConfig(req.ConfigYAML)
+	if err != nil {
+		return err
 	}
-	if len(req.ConfigYAML) > 0 {
-		if err := yaml.Unmarshal(req.ConfigYAML, &cfg); err != nil {
-			return err
-		}
-	}
-	return manager.configure(cfg.Providers)
+	return manager.configure(policies)
 }
 
 func pluginRegistration() registration {
 	return registration{SchemaVersion: pluginabi.SchemaVersion, Metadata: pluginapi.Metadata{
 		Name: "local-queue", Version: pluginVersion, Author: "timonwong", GitHubRepository: "https://github.com/timonwong/cpa-plugin-local-queue",
-		ConfigFields: []pluginapi.ConfigField{{Name: "providers", Type: pluginapi.ConfigFieldTypeObject, Description: "Provider policies keyed by provider name; only configured providers are limited."}},
+		ConfigFields: []pluginapi.ConfigField{
+			{Name: "codex", Type: pluginapi.ConfigFieldTypeObject, Description: "Policy for the codex provider. Use JSON such as {\"max_concurrency\":5,\"rpm\":20,\"max_queue\":100,\"max_wait\":\"5m\"}."},
+			{Name: "claude", Type: pluginapi.ConfigFieldTypeObject, Description: "Policy for the claude provider. Use JSON such as {\"max_concurrency\":3,\"rpm\":10,\"max_queue\":50,\"max_wait\":\"3m\"}."},
+			{Name: "providers", Type: pluginapi.ConfigFieldTypeObject, Description: "Advanced provider policies keyed by provider name; named fields above override matching entries."},
+		},
 	}, Capabilities: registrationCapabilities{Scheduler: true, RequestInterceptor: true, RequestLifecyclePlugin: true}}
+}
+
+func parseConfig(raw []byte) (map[string]providerPolicy, error) {
+	var cfg pluginConfig
+	if len(raw) > 0 {
+		if err := yaml.Unmarshal(raw, &cfg); err != nil {
+			return nil, err
+		}
+	}
+	policies := make(map[string]providerPolicy, len(cfg.Providers)+2)
+	for provider, policy := range cfg.Providers {
+		policies[strings.ToLower(strings.TrimSpace(provider))] = policy
+	}
+	if cfg.Codex != nil {
+		policies["codex"] = *cfg.Codex
+	}
+	if cfg.Claude != nil {
+		policies["claude"] = *cfg.Claude
+	}
+	return policies, nil
 }
 
 func schedulerPick(raw []byte) ([]byte, error) {

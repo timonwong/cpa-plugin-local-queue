@@ -3,12 +3,53 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"testing"
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginabi"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
+
+func TestPluginRegistrationExposesNamedProviderFields(t *testing.T) {
+	fields := pluginRegistration().Metadata.ConfigFields
+	got := make([]string, 0, len(fields))
+	for _, field := range fields {
+		got = append(got, field.Name)
+	}
+	if want := []string{"codex", "claude", "providers"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("config fields: got %v, want %v", got, want)
+	}
+}
+
+func TestParseConfigNamedProviderFieldsOverrideProviderMap(t *testing.T) {
+	policies, err := parseConfig([]byte(`providers:
+  codex:
+    max_concurrency: 1
+    rpm: 1
+    max_queue: 1
+    max_wait: 1s
+codex:
+  max_concurrency: 5
+  rpm: 20
+  max_queue: 100
+  max_wait: 5m
+claude:
+  max_concurrency: 3
+  rpm: 10
+  max_queue: 50
+  max_wait: 3m
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := policies["codex"]; got.MaxConcurrency != 5 || got.RPM != 20 || got.MaxQueue != 100 || got.MaxWaitText != "5m" {
+		t.Fatalf("codex policy: %#v", got)
+	}
+	if got := policies["claude"]; got.MaxConcurrency != 3 || got.RPM != 10 || got.MaxQueue != 50 || got.MaxWaitText != "3m" {
+		t.Fatalf("claude policy: %#v", got)
+	}
+}
 
 func TestPluginRPCAdmitsSelectedCredentialAndReleasesOnCompletion(t *testing.T) {
 	manager = newQueueManager()
