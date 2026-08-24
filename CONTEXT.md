@@ -4,8 +4,8 @@
 
 - A **provider** is CPA's provider key, such as `codex` or `claude`.
 - A **credential** is one concrete CPA auth record selected for a request.
-- Configuration is keyed by provider, but runtime state is keyed by selected credential `auth_id`.
-- A credential whose provider is absent from configuration bypasses this plugin.
+- Configuration has one shared queue policy and an explicit `enabled_providers` list; runtime state is keyed by selected credential `auth_id`.
+- A credential whose provider is absent from `enabled_providers` bypasses this plugin.
 
 ## Admission Contract
 

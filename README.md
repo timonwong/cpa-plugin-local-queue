@@ -1,6 +1,6 @@
 # CPA Local Queue Plugin
 
-This Go plugin adds credential-level FIFO admission to CLIProxyAPI while keeping configuration at the provider level.
+This Go plugin adds credential-level FIFO admission to CLIProxyAPI with one shared policy and an explicit list of enabled providers.
 
 Only providers present in the plugin configuration are limited. For every selected credential of a configured provider, the plugin maintains an independent queue, concurrency counter, and one-minute request window. Credentials belonging to providers that are not configured pass through unchanged.
 
@@ -8,17 +8,13 @@ Only providers present in the plugin configuration are limited. For every select
 plugins:
   configs:
     local-queue:
-      providers:
-        codex:
-          max_concurrency: 5
-          rpm: 20
-          max_queue: 100
-          max_wait: 5m
-        claude:
-          max_concurrency: 3
-          rpm: 10
-          max_queue: 50
-          max_wait: 3m
+      max_concurrency: 5
+      rpm: 20
+      max_queue: 100
+      max_wait: 5m
+      enabled_providers:
+        - codex
+        - claude
 ```
 
 The plugin learns `auth_id -> provider` from `scheduler.pick`, admits the selected credential in `request.intercept_after`, and releases it from `request.complete`. It returns HTTP 429 with `Retry-After: 1` when a queue is full or the wait deadline expires.
@@ -27,18 +23,21 @@ The plugin does not modify CPA's upstream retry behavior. In particular, the cur
 
 ## GUI configuration
 
-The management UI exposes the current providers as named fields: `codex` and `claude`. Each field accepts one JSON object containing `max_concurrency`, `rpm`, `max_queue`, and `max_wait`, for example:
+The management UI exposes one shared policy and one provider list:
+
+- `max_concurrency`
+- `rpm`
+- `max_queue`
+- `max_wait`
+- `enabled_providers`
+
+`enabled_providers` is a JSON array, for example:
 
 ```json
-{
-  "max_concurrency": 5,
-  "rpm": 20,
-  "max_queue": 100,
-  "max_wait": "5m"
-}
+["codex", "claude"]
 ```
 
-The `providers` field remains available for other provider names and existing YAML configurations. When a named field and `providers` both configure the same provider, the named field wins.
+All enabled providers use the same policy values. Their runtime queues and rate windows remain independent per selected credential.
 
 ## Plugin store
 
