@@ -16,7 +16,6 @@ extern void cliproxyPluginShutdown(void);
 import "C"
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -178,9 +177,14 @@ func pluginRegistration() registration {
 func parseConfig(raw []byte) (map[string]providerPolicy, error) {
 	var cfg pluginConfig
 	if len(raw) > 0 {
-		decoder := yaml.NewDecoder(bytes.NewReader(raw))
-		decoder.KnownFields(true)
-		if err := decoder.Decode(&cfg); err != nil {
+		var fields map[string]yaml.Node
+		if err := yaml.Unmarshal(raw, &fields); err != nil {
+			return nil, err
+		}
+		if _, legacy := fields["providers"]; legacy {
+			return nil, errors.New("field providers not found in type main.pluginConfig")
+		}
+		if err := yaml.Unmarshal(raw, &cfg); err != nil {
 			return nil, err
 		}
 	}
