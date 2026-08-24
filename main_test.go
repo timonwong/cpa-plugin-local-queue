@@ -48,6 +48,26 @@ func TestParseConfigRejectsLegacyProvidersField(t *testing.T) {
 	}
 }
 
+func TestParseConfigIgnoresHostPluginMetadata(t *testing.T) {
+	policies, err := parseConfig([]byte(`enabled: true
+max_concurrency: 5
+rpm: 20
+max_queue: 100
+max_wait: 5m
+enabled_providers: [codex]
+store:
+  id: local-queue
+  version: 0.2.0
+priority: 10
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := policies["codex"]; !ok {
+		t.Fatalf("codex policy missing: %#v", policies)
+	}
+}
+
 func TestPluginRegisterReturnsMetadataForLegacyConfig(t *testing.T) {
 	manager = newQueueManager()
 	configRaw, err := json.Marshal(lifecycleRequest{
