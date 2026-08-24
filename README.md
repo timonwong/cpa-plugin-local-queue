@@ -25,6 +25,21 @@ The plugin learns `auth_id -> provider` from `scheduler.pick`, admits the select
 
 The plugin does not modify CPA's upstream retry behavior. In particular, the current ABI does not provide a callback that can resubmit an upstream 429 to the original credential queue.
 
+## GUI configuration
+
+The management UI exposes the current providers as named fields: `codex` and `claude`. Each field accepts one JSON object containing `max_concurrency`, `rpm`, `max_queue`, and `max_wait`, for example:
+
+```json
+{
+  "max_concurrency": 5,
+  "rpm": 20,
+  "max_queue": 100,
+  "max_wait": "5m"
+}
+```
+
+The `providers` field remains available for other provider names and existing YAML configurations. When a named field and `providers` both configure the same provider, the named field wins.
+
 ## Plugin store
 
 The plugin store registry is maintained separately from the source tree and contains only this plugin:
