@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "plugins": [
+    {
+      "id": "local-queue",
+      "name": "CPA Local Queue",
+      "description": "Credential-level FIFO admission plugin for CLIProxyAPI.",
+      "author": "timonwong",
+      "version": "0.1.0",
+      "repository": "https://github.com/timonwong/cpa-plugin-local-queue",
+      "install": {"type": "github-release"}
+    }
+  ]
+}
