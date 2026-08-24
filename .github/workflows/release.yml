@@ -147,7 +147,6 @@ jobs:
             git switch --track -c plugin-store-release origin/plugin-store-release
           else
             git switch --orphan plugin-store-release
-            git rm -rf .
           fi
           find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
           cat > registry.json <<EOF
