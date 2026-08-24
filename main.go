@@ -202,9 +202,9 @@ func pluginRegistration() registration {
 	return registration{SchemaVersion: pluginabi.SchemaVersion, Metadata: pluginapi.Metadata{
 		Name: "local-queue", Version: pluginVersion, Author: "timonwong", GitHubRepository: "https://github.com/timonwong/cpa-plugin-local-queue",
 		ConfigFields: []pluginapi.ConfigField{
-			{Name: "max_concurrency", Type: pluginapi.ConfigFieldTypeInteger, Description: "Shared maximum concurrent requests for each enabled provider."},
-			{Name: "rpm", Type: pluginapi.ConfigFieldTypeInteger, Description: "Shared maximum requests per minute for each enabled provider."},
-			{Name: "max_queue", Type: pluginapi.ConfigFieldTypeInteger, Description: "Shared maximum waiting requests for each enabled provider."},
+			{Name: "max_concurrency", Type: pluginapi.ConfigFieldTypeInteger, Description: "Shared maximum concurrent requests per selected credential."},
+			{Name: "rpm", Type: pluginapi.ConfigFieldTypeInteger, Description: "Shared maximum requests per minute per selected credential."},
+			{Name: "max_queue", Type: pluginapi.ConfigFieldTypeInteger, Description: "Shared maximum waiting requests per selected credential."},
 			{Name: "max_wait", Type: pluginapi.ConfigFieldTypeString, Description: "Shared maximum queue wait duration, such as 30s or 5m."},
 			{Name: "enabled_providers", Type: pluginapi.ConfigFieldTypeArray, Description: "JSON array of provider names to enable."},
 			{Name: "log_level", Type: pluginapi.ConfigFieldTypeEnum, EnumValues: []string{"error", "warn", "info", "debug", "trace"}, Description: "Minimum plugin log level emitted through the CPA host logger."},
