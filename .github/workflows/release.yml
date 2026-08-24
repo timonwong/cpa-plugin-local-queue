@@ -87,22 +87,21 @@ jobs:
           VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           set -euo pipefail
-          out="${PLUGIN_ID}-v${VERSION}-${{ matrix.goos }}-${{ matrix.goarch }}"
+          out="${PLUGIN_ID}_${VERSION}_${{ matrix.goos }}_${{ matrix.goarch }}"
           mkdir -p "$out"
           CGO_ENABLED=1 go build -buildmode=c-shared -ldflags "-X main.pluginVersion=${VERSION}" -o "$out/${PLUGIN_ID}.${{ matrix.ext }}" .
-          cp README.md "$out/README.md"
-          tar -czf "${out}.tar.gz" "$out"
+          zip -j "${out}.zip" "$out/${PLUGIN_ID}.${{ matrix.ext }}"
           if command -v sha256sum >/dev/null 2>&1; then
-            sha256sum "${out}.tar.gz" > "${out}.tar.gz.sha256"
+            sha256sum "${out}.zip" > "${out}.zip.sha256"
           else
-            shasum -a 256 "${out}.tar.gz" > "${out}.tar.gz.sha256"
+            shasum -a 256 "${out}.zip" > "${out}.zip.sha256"
           fi
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.goos }}-${{ matrix.goarch }}
           path: |
-            local-queue-v*.tar.gz
-            local-queue-v*.tar.gz.sha256
+            local-queue_*.zip
+            local-queue_*.zip.sha256
           if-no-files-found: error
 
   publish:
@@ -119,6 +118,7 @@ jobs:
           TAG: ${{ needs.prepare.outputs.tag }}
         run: |
           set -euo pipefail
+          cat dist/*.zip.sha256 > dist/checksums.txt
           if ! gh release view "$TAG" --repo "$REPOSITORY" >/dev/null 2>&1; then
             gh release create "$TAG" --repo "$REPOSITORY" --title "$TAG" --generate-notes
           fi
