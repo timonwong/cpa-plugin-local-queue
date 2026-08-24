@@ -16,8 +16,10 @@ extern void cliproxyPluginShutdown(void);
 import "C"
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -46,9 +48,11 @@ type lifecycleRequest struct {
 }
 
 type pluginConfig struct {
-	Providers map[string]providerPolicy `yaml:"providers"`
-	Codex     *providerPolicy           `yaml:"codex"`
-	Claude    *providerPolicy           `yaml:"claude"`
+	MaxConcurrency   int      `yaml:"max_concurrency"`
+	RPM              int      `yaml:"rpm"`
+	MaxQueue         int      `yaml:"max_queue"`
+	MaxWaitText      string   `yaml:"max_wait"`
+	EnabledProviders []string `yaml:"enabled_providers"`
 }
 
 type registration struct {
@@ -150,9 +154,11 @@ func pluginRegistration() registration {
 	return registration{SchemaVersion: pluginabi.SchemaVersion, Metadata: pluginapi.Metadata{
 		Name: "local-queue", Version: pluginVersion, Author: "timonwong", GitHubRepository: "https://github.com/timonwong/cpa-plugin-local-queue",
 		ConfigFields: []pluginapi.ConfigField{
-			{Name: "codex", Type: pluginapi.ConfigFieldTypeObject, Description: "Policy for the codex provider. Use JSON such as {\"max_concurrency\":5,\"rpm\":20,\"max_queue\":100,\"max_wait\":\"5m\"}."},
-			{Name: "claude", Type: pluginapi.ConfigFieldTypeObject, Description: "Policy for the claude provider. Use JSON such as {\"max_concurrency\":3,\"rpm\":10,\"max_queue\":50,\"max_wait\":\"3m\"}."},
-			{Name: "providers", Type: pluginapi.ConfigFieldTypeObject, Description: "Advanced provider policies keyed by provider name; named fields above override matching entries."},
+			{Name: "max_concurrency", Type: pluginapi.ConfigFieldTypeInteger, Description: "Shared maximum concurrent requests for each enabled provider."},
+			{Name: "rpm", Type: pluginapi.ConfigFieldTypeInteger, Description: "Shared maximum requests per minute for each enabled provider."},
+			{Name: "max_queue", Type: pluginapi.ConfigFieldTypeInteger, Description: "Shared maximum waiting requests for each enabled provider."},
+			{Name: "max_wait", Type: pluginapi.ConfigFieldTypeString, Description: "Shared maximum queue wait duration, such as 30s or 5m."},
+			{Name: "enabled_providers", Type: pluginapi.ConfigFieldTypeArray, Description: "JSON array of provider names to enable."},
 		},
 	}, Capabilities: registrationCapabilities{Scheduler: true, RequestInterceptor: true, RequestLifecyclePlugin: true}}
 }
@@ -160,19 +166,25 @@ func pluginRegistration() registration {
 func parseConfig(raw []byte) (map[string]providerPolicy, error) {
 	var cfg pluginConfig
 	if len(raw) > 0 {
-		if err := yaml.Unmarshal(raw, &cfg); err != nil {
+		decoder := yaml.NewDecoder(bytes.NewReader(raw))
+		decoder.KnownFields(true)
+		if err := decoder.Decode(&cfg); err != nil {
 			return nil, err
 		}
 	}
-	policies := make(map[string]providerPolicy, len(cfg.Providers)+2)
-	for provider, policy := range cfg.Providers {
-		policies[strings.ToLower(strings.TrimSpace(provider))] = policy
+	policy := providerPolicy{
+		MaxConcurrency: cfg.MaxConcurrency,
+		RPM:            cfg.RPM,
+		MaxQueue:       cfg.MaxQueue,
+		MaxWaitText:    cfg.MaxWaitText,
 	}
-	if cfg.Codex != nil {
-		policies["codex"] = *cfg.Codex
-	}
-	if cfg.Claude != nil {
-		policies["claude"] = *cfg.Claude
+	policies := make(map[string]providerPolicy, len(cfg.EnabledProviders))
+	for _, provider := range cfg.EnabledProviders {
+		provider = strings.ToLower(strings.TrimSpace(provider))
+		if provider == "" {
+			return nil, errors.New("enabled provider name must not be empty")
+		}
+		policies[provider] = policy
 	}
 	return policies, nil
 }

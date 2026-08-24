@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,34 +12,23 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
 
-func TestPluginRegistrationExposesNamedProviderFields(t *testing.T) {
+func TestPluginRegistrationExposesFlatProviderConfigFields(t *testing.T) {
 	fields := pluginRegistration().Metadata.ConfigFields
 	got := make([]string, 0, len(fields))
 	for _, field := range fields {
 		got = append(got, field.Name)
 	}
-	if want := []string{"codex", "claude", "providers"}; !reflect.DeepEqual(got, want) {
+	if want := []string{"max_concurrency", "rpm", "max_queue", "max_wait", "enabled_providers"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("config fields: got %v, want %v", got, want)
 	}
 }
 
-func TestParseConfigNamedProviderFieldsOverrideProviderMap(t *testing.T) {
-	policies, err := parseConfig([]byte(`providers:
-  codex:
-    max_concurrency: 1
-    rpm: 1
-    max_queue: 1
-    max_wait: 1s
-codex:
-  max_concurrency: 5
-  rpm: 20
-  max_queue: 100
-  max_wait: 5m
-claude:
-  max_concurrency: 3
-  rpm: 10
-  max_queue: 50
-  max_wait: 3m
+func TestParseConfigUsesSharedPolicyForEnabledProviders(t *testing.T) {
+	policies, err := parseConfig([]byte(`max_concurrency: 5
+rpm: 20
+max_queue: 100
+max_wait: 5m
+enabled_providers: [codex, claude]
 `))
 	if err != nil {
 		t.Fatal(err)
@@ -46,8 +36,15 @@ claude:
 	if got := policies["codex"]; got.MaxConcurrency != 5 || got.RPM != 20 || got.MaxQueue != 100 || got.MaxWaitText != "5m" {
 		t.Fatalf("codex policy: %#v", got)
 	}
-	if got := policies["claude"]; got.MaxConcurrency != 3 || got.RPM != 10 || got.MaxQueue != 50 || got.MaxWaitText != "3m" {
+	if got := policies["claude"]; got != policies["codex"] {
 		t.Fatalf("claude policy: %#v", got)
+	}
+}
+
+func TestParseConfigRejectsLegacyProvidersField(t *testing.T) {
+	_, err := parseConfig([]byte("providers:\n  codex: {}\n"))
+	if err == nil || !strings.Contains(err.Error(), "field providers not found") {
+		t.Fatalf("got %v, want legacy providers field error", err)
 	}
 }
 
@@ -55,7 +52,7 @@ func TestPluginRPCAdmitsSelectedCredentialAndReleasesOnCompletion(t *testing.T) 
 	manager = newQueueManager()
 	configRaw, err := json.Marshal(lifecycleRequest{
 		SchemaVersion: pluginabi.SchemaVersion,
-		ConfigYAML:    []byte("providers:\n  codex:\n    max_concurrency: 1\n    rpm: 10\n    max_queue: 0\n    max_wait: 1s\n"),
+		ConfigYAML:    []byte("max_concurrency: 1\nrpm: 10\nmax_queue: 0\nmax_wait: 1s\nenabled_providers: [codex]\n"),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -97,7 +94,7 @@ func TestPluginRPCBypassesUnconfiguredCredential(t *testing.T) {
 	manager = newQueueManager()
 	configRaw, err := json.Marshal(lifecycleRequest{
 		SchemaVersion: pluginabi.SchemaVersion,
-		ConfigYAML:    []byte("providers:\n  codex:\n    max_concurrency: 1\n    rpm: 1\n    max_queue: 0\n    max_wait: 1s\n"),
+		ConfigYAML:    []byte("max_concurrency: 1\nrpm: 1\nmax_queue: 0\nmax_wait: 1s\nenabled_providers: [codex]\n"),
 	})
 	if err != nil {
 		t.Fatal(err)
