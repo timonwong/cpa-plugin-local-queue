@@ -15,6 +15,7 @@ plugins:
       enabled_providers:
         - codex
         - claude
+      log_level: info
 ```
 
 The plugin learns `auth_id -> provider` from `scheduler.pick`, admits the selected credential in `request.intercept_after`, and releases it from `request.complete`. It returns HTTP 429 with `Retry-After: 1` when a queue is full or the wait deadline expires.
@@ -30,6 +31,7 @@ The management UI exposes one shared policy and one provider list:
 - `max_queue`
 - `max_wait`
 - `enabled_providers`
+- `log_level` (`error`, `warn`, `info`, `debug`, or `trace`; defaults to `info`)
 
 `enabled_providers` is a JSON array, for example:
 
@@ -38,6 +40,10 @@ The management UI exposes one shared policy and one provider list:
 ```
 
 All enabled providers use the same policy values. Their runtime queues and rate windows remain independent per selected credential.
+
+## Logging
+
+The plugin emits structured logs through CPA's `host.log` callback, so they use the host's normal log output and log streaming path. `info` reports configuration changes, `warn` reports queue rejections, `debug` reports queue admission and release, and `trace` reports scheduler observations and bypasses caused by an unknown mapping, an unconfigured provider, or reconfiguration. Each event keeps a short message and only the context needed to understand it: request, credential, provider, and queue counters where applicable. The host supplies the plugin identity; the plugin does not duplicate it. Logs never include request bodies or credential contents.
 
 ## Plugin store
 
@@ -68,6 +74,12 @@ The release workflow updates the registry branch and creates a versioned store s
 go test ./...
 go test -race ./...
 go build -buildmode=c-shared -o local-queue.so .
+```
+
+The CPA SDK integration test builds the dynamic library, loads it through `sdk/pluginhost`, and verifies that `host.log` reaches the host logger:
+
+```bash
+go test -tags=integration -run '^TestPluginEmitsLogsThroughCPAHostSDK$' ./...
 ```
 
 Install the resulting dynamic library using the CPA plugin directory for the target platform. The artifact filename must match the plugin ID configured in CPA.

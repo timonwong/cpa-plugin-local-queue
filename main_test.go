@@ -18,26 +18,30 @@ func TestPluginRegistrationExposesFlatProviderConfigFields(t *testing.T) {
 	for _, field := range fields {
 		got = append(got, field.Name)
 	}
-	if want := []string{"max_concurrency", "rpm", "max_queue", "max_wait", "enabled_providers"}; !reflect.DeepEqual(got, want) {
+	if want := []string{"max_concurrency", "rpm", "max_queue", "max_wait", "enabled_providers", "log_level"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("config fields: got %v, want %v", got, want)
 	}
 }
 
 func TestParseConfigUsesSharedPolicyForEnabledProviders(t *testing.T) {
-	policies, err := parseConfig([]byte(`max_concurrency: 5
+	cfg, err := parseConfig([]byte(`max_concurrency: 5
 rpm: 20
 max_queue: 100
 max_wait: 5m
 enabled_providers: [codex, claude]
+log_level: debug
 `))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := policies["codex"]; got.MaxConcurrency != 5 || got.RPM != 20 || got.MaxQueue != 100 || got.MaxWaitText != "5m" {
+	if got := cfg.policies["codex"]; got.MaxConcurrency != 5 || got.RPM != 20 || got.MaxQueue != 100 || got.MaxWaitText != "5m" {
 		t.Fatalf("codex policy: %#v", got)
 	}
-	if got := policies["claude"]; got != policies["codex"] {
+	if got := cfg.policies["claude"]; got != cfg.policies["codex"] {
 		t.Fatalf("claude policy: %#v", got)
+	}
+	if cfg.logLevel != logLevelDebug {
+		t.Fatalf("log level: got %s, want debug", cfg.logLevel)
 	}
 }
 
@@ -49,7 +53,7 @@ func TestParseConfigRejectsLegacyProvidersField(t *testing.T) {
 }
 
 func TestParseConfigIgnoresHostPluginMetadata(t *testing.T) {
-	policies, err := parseConfig([]byte(`enabled: true
+	cfg, err := parseConfig([]byte(`enabled: true
 max_concurrency: 5
 rpm: 20
 max_queue: 100
@@ -63,8 +67,25 @@ priority: 10
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := policies["codex"]; !ok {
-		t.Fatalf("codex policy missing: %#v", policies)
+	if _, ok := cfg.policies["codex"]; !ok {
+		t.Fatalf("codex policy missing: %#v", cfg.policies)
+	}
+}
+
+func TestParseConfigDefaultsLogLevelToInfo(t *testing.T) {
+	cfg, err := parseConfig(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.logLevel != logLevelInfo {
+		t.Fatalf("log level: got %s, want info", cfg.logLevel)
+	}
+}
+
+func TestParseConfigRejectsUnknownLogLevel(t *testing.T) {
+	_, err := parseConfig([]byte("log_level: verbose\n"))
+	if err == nil || !strings.Contains(err.Error(), "log_level must be one of") {
+		t.Fatalf("got %v, want invalid log level error", err)
 	}
 }
 

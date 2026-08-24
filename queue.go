@@ -64,6 +64,12 @@ type credentialQueue struct {
 	rpm      []time.Time
 }
 
+type queueSnapshot struct {
+	active int
+	queued int
+	rpm    int
+}
+
 func newCredentialQueue(policy providerPolicy) *credentialQueue {
 	return &credentialQueue{policy: policy.normalized(), admitted: make(map[string]struct{})}
 }
@@ -189,11 +195,18 @@ func (q *credentialQueue) isDisabled() bool {
 	return q.disabled
 }
 
-func (q *credentialQueue) release(requestID string) {
+func (q *credentialQueue) snapshot() queueSnapshot {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.pruneRPM()
+	return queueSnapshot{active: q.active, queued: len(q.queued), rpm: len(q.rpm)}
+}
+
+func (q *credentialQueue) release(requestID string) bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if _, ok := q.admitted[requestID]; !ok {
-		return
+		return false
 	}
 	delete(q.admitted, requestID)
 	if q.active > 0 {
@@ -202,10 +215,11 @@ func (q *credentialQueue) release(requestID string) {
 	q.pruneRPM()
 	if len(q.queued) > 0 {
 		if q.disabled {
-			return
+			return true
 		}
 		q.promoteLocked(q.queued[0].requestID)
 	}
+	return true
 }
 
 func (q *credentialQueue) pruneRPM() {
@@ -284,10 +298,21 @@ func (m *queueManager) policyFor(provider string) (providerPolicy, bool) {
 
 func (m *queueManager) acquire(ctx context.Context, requestID, authID string) error {
 	m.mu.Lock()
-	provider := m.providers[strings.TrimSpace(authID)]
+	authID = strings.TrimSpace(authID)
+	provider, mapped := m.providers[authID]
+	if !mapped || provider == "" {
+		m.mu.Unlock()
+		logger.log(logLevelTrace, "request bypassed local queue: credential provider is unknown", map[string]any{
+			"request_id": requestID,
+			"credential": authID,
+			"reason":     "provider mapping unavailable",
+		})
+		return nil
+	}
 	policy, configured := m.policies[provider]
 	if !configured {
 		m.mu.Unlock()
+		logger.log(logLevelTrace, "request bypassed local queue", map[string]any{"request_id": requestID, "credential": authID, "provider": provider})
 		return nil
 	}
 	q := m.queues[authID]
@@ -298,8 +323,18 @@ func (m *queueManager) acquire(ctx context.Context, requestID, authID string) er
 	m.mu.Unlock()
 	if err := q.acquire(ctx, requestID); err != nil {
 		if errors.Is(err, ErrQueueBypass) {
+			logger.log(logLevelTrace, "request bypassed local queue after reconfiguration", map[string]any{
+				"request_id": requestID,
+				"credential": authID,
+				"provider":   provider,
+				"reason":     "provider no longer configured",
+			})
 			return nil
 		}
+		after := q.snapshot()
+		fields := queueLogFields(requestID, authID, provider, after)
+		fields["reason"] = err.Error()
+		logger.log(logLevelWarn, "request rejected by local queue", fields)
 		return err
 	}
 	m.mu.Lock()
@@ -308,6 +343,8 @@ func (m *queueManager) acquire(ctx context.Context, requestID, authID string) er
 	}
 	m.requests[requestID][authID] = struct{}{}
 	m.mu.Unlock()
+	after := q.snapshot()
+	logger.log(logLevelDebug, "request admitted by local queue", queueLogFields(requestID, authID, provider, after))
 	return nil
 }
 
@@ -315,14 +352,34 @@ func (m *queueManager) release(requestID string) {
 	m.mu.Lock()
 	authIDs := m.requests[requestID]
 	delete(m.requests, requestID)
-	queues := make([]*credentialQueue, 0, len(authIDs))
+	type queueRelease struct {
+		authID   string
+		provider string
+		queue    *credentialQueue
+	}
+	queues := make([]queueRelease, 0, len(authIDs))
 	for authID := range authIDs {
 		if q := m.queues[authID]; q != nil {
-			queues = append(queues, q)
+			queues = append(queues, queueRelease{authID: authID, provider: m.providers[authID], queue: q})
 		}
 	}
 	m.mu.Unlock()
-	for _, q := range queues {
-		q.release(requestID)
+	for _, item := range queues {
+		if !item.queue.release(requestID) {
+			continue
+		}
+		after := item.queue.snapshot()
+		logger.log(logLevelDebug, "request released from local queue", queueLogFields(requestID, item.authID, item.provider, after))
+	}
+}
+
+func queueLogFields(requestID, authID, provider string, snapshot queueSnapshot) map[string]any {
+	return map[string]any{
+		"request_id": requestID,
+		"credential": authID,
+		"provider":   provider,
+		"active":     snapshot.active,
+		"queued":     snapshot.queued,
+		"rpm":        snapshot.rpm,
 	}
 }

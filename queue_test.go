@@ -34,6 +34,16 @@ func TestUnconfiguredProviderBypasses(t *testing.T) {
 	}
 }
 
+func TestUnknownCredentialMappingBypasses(t *testing.T) {
+	m := newQueueManager()
+	if err := m.configure(map[string]providerPolicy{"codex": {MaxConcurrency: 1, RPM: 1, MaxQueue: 0, MaxWait: time.Second}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.acquire(context.Background(), "r1", "unknown-auth"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestCredentialQueueIsFIFOAndBounded(t *testing.T) {
 	q := newCredentialQueue(providerPolicy{MaxConcurrency: 1, RPM: 100, MaxQueue: 1, MaxWait: 100 * time.Millisecond})
 	if err := q.acquire(context.Background(), "r1"); err != nil {
