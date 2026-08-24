@@ -29,6 +29,7 @@ import (
 )
 
 var manager = newQueueManager()
+var pluginVersion = "0.1.0"
 
 type envelope struct {
 	OK     bool            `json:"ok"`
@@ -144,7 +145,7 @@ func configure(raw []byte) error {
 
 func pluginRegistration() registration {
 	return registration{SchemaVersion: pluginabi.SchemaVersion, Metadata: pluginapi.Metadata{
-		Name: "local-queue", Version: "0.1.0", Author: "timonwong", GitHubRepository: "https://github.com/timonwong/cpa-plugin-local-queue",
+		Name: "local-queue", Version: pluginVersion, Author: "timonwong", GitHubRepository: "https://github.com/timonwong/cpa-plugin-local-queue",
 		ConfigFields: []pluginapi.ConfigField{{Name: "providers", Type: pluginapi.ConfigFieldTypeObject, Description: "Provider policies keyed by provider name; only configured providers are limited."}},
 	}, Capabilities: registrationCapabilities{Scheduler: true, RequestInterceptor: true, RequestLifecyclePlugin: true}}
 }

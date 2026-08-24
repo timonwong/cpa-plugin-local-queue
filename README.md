@@ -25,6 +25,29 @@ The plugin learns `auth_id -> provider` from `scheduler.pick`, admits the select
 
 The plugin does not modify CPA's upstream retry behavior. In particular, the current ABI does not provide a callback that can resubmit an upstream 429 to the original credential queue.
 
+## Plugin store
+
+The plugin store registry is maintained separately from the source tree and contains only this plugin:
+
+```text
+https://raw.githubusercontent.com/timonwong/cpa-plugin-local-queue/plugin-store-release/registry.json
+```
+
+Configure CPA to use the store with a GitHub token that can read this repository:
+
+```yaml
+plugins:
+  store-sources:
+    - "https://raw.githubusercontent.com/timonwong/cpa-plugin-local-queue/plugin-store-release/registry.json"
+  store-auth:
+    - match: "https://raw.githubusercontent.com/timonwong/cpa-plugin-local-queue/"
+      apply-to: ["registry", "artifact"]
+      type: github-token
+      token-env: "CLIPROXY_PLUGIN_STORE_TOKEN"
+```
+
+The release workflow updates the registry branch and creates a versioned store snapshot tag such as `plugin-store-release/v0.1.0`.
+
 ## Build
 
 ```bash
