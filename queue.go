@@ -334,6 +334,7 @@ type queueManager struct {
 	queues    map[string]*credentialQueue
 	providers map[string]string
 	requests  map[string]*requestEntry
+	warned    map[string]struct{}
 }
 
 func newQueueManager() *queueManager {
@@ -342,6 +343,7 @@ func newQueueManager() *queueManager {
 		queues:    map[string]*credentialQueue{},
 		providers: map[string]string{},
 		requests:  map[string]*requestEntry{},
+		warned:    map[string]struct{}{},
 	}
 }
 
@@ -361,6 +363,7 @@ func (m *queueManager) configure(policies map[string]providerPolicy) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.policies = next
+	m.warned = map[string]struct{}{}
 	for authID, q := range m.queues {
 		provider := m.providers[authID]
 		if policy, ok := next[provider]; ok {
@@ -401,6 +404,7 @@ func (m *queueManager) reset() {
 	m.queues = map[string]*credentialQueue{}
 	m.providers = map[string]string{}
 	m.requests = map[string]*requestEntry{}
+	m.warned = map[string]struct{}{}
 }
 
 func (m *queueManager) rememberCandidates(providerByAuth map[string]string) {
@@ -418,23 +422,52 @@ func (m *queueManager) policyFor(provider string) (providerPolicy, bool) {
 	return policy, ok
 }
 
+// warnOnce reports whether this reason/credential pair still deserves a warning.
+// Repeat occurrences stay at trace level so a persistent gap is not a log flood.
+func (m *queueManager) warnOnce(reason, authID string) bool {
+	key := reason + "\x00" + authID
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.warned[key]; ok {
+		return false
+	}
+	m.warned[key] = struct{}{}
+	return true
+}
+
+func (m *queueManager) logBypass(message, reason, requestID, authID, provider string) {
+	level := logLevelTrace
+	if m.warnOnce(reason, authID) {
+		level = logLevelWarn
+	}
+	if !logger.enabled(level) {
+		return
+	}
+	fields := map[string]any{
+		"request_id": requestID,
+		"credential": authID,
+		"reason":     reason,
+		"impact":     "local queue limits are not applied to this request",
+	}
+	if provider != "" {
+		fields["provider"] = provider
+	}
+	logger.log(level, message, fields)
+}
+
 func (m *queueManager) acquire(ctx context.Context, requestID, authID string) error {
 	authID = strings.TrimSpace(authID)
 	m.mu.Lock()
 	provider, mapped := m.providers[authID]
 	if !mapped || provider == "" {
 		m.mu.Unlock()
-		logger.log(logLevelTrace, "request bypassed local queue: credential provider is unknown", map[string]any{
-			"request_id": requestID,
-			"credential": authID,
-			"reason":     "provider mapping unavailable",
-		})
+		m.logBypass("request bypassed local queue: credential provider is unknown", "provider mapping unavailable", requestID, authID, "")
 		return nil
 	}
 	policy, configured := m.policies[provider]
 	if !configured {
 		m.mu.Unlock()
-		logger.log(logLevelTrace, "request bypassed local queue", map[string]any{"request_id": requestID, "credential": authID, "provider": provider})
+		m.logBypass("request bypassed local queue", "provider not configured", requestID, authID, provider)
 		return nil
 	}
 	q := m.queues[authID]

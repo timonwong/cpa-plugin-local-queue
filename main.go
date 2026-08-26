@@ -279,12 +279,24 @@ func interceptAfter(raw []byte) ([]byte, error) {
 	if strings.TrimSpace(req.RequestID) == "" {
 		return nil, fmt.Errorf("request ID is required")
 	}
-	authID := metadataString(req.Metadata, "selected_auth_id", "SelectedAuthMetadataKey")
-	if authID != "" {
-		// The C ABI carries no cancellation context, so max_wait bounds this synchronous admission.
-		if err := manager.acquire(context.Background(), req.RequestID, authID); err != nil {
-			return rejected(http.StatusTooManyRequests, err.Error())
+	authID := metadataString(req.Metadata, "selected_auth_id")
+	if authID == "" {
+		level := logLevelTrace
+		if manager.warnOnce("selected auth id missing", "") {
+			level = logLevelWarn
 		}
+		if logger.enabled(level) {
+			logger.log(level, "request bypassed local queue: host reported no selected credential", map[string]any{
+				"request_id": req.RequestID,
+				"reason":     "selected_auth_id metadata missing",
+				"impact":     "local queue limits are not applied to this request",
+			})
+		}
+		return okEnvelope(pluginapi.RequestInterceptResponse{Headers: req.Headers, Body: req.Body})
+	}
+	// The C ABI carries no cancellation context, so max_wait bounds this synchronous admission.
+	if err := manager.acquire(context.Background(), req.RequestID, authID); err != nil {
+		return rejected(http.StatusTooManyRequests, err.Error())
 	}
 	return okEnvelope(pluginapi.RequestInterceptResponse{Headers: req.Headers, Body: req.Body})
 }
