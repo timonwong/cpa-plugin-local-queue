@@ -49,6 +49,9 @@ var manager = newQueueManager()
 var logger = newPluginLogger(writeHostLog)
 var pluginVersion = "0.1.0"
 
+// emptyInterceptResponse is the pre-encoded "leave this request untouched" reply.
+var emptyInterceptResponse = mustEnvelope(struct{}{})
+
 type envelope struct {
 	OK     bool            `json:"ok"`
 	Result json.RawMessage `json:"result,omitempty"`
@@ -265,14 +268,24 @@ func schedulerPick(raw []byte) ([]byte, error) {
 		}
 	}
 	manager.rememberCandidates(providerByAuth)
-	logger.log(logLevelTrace, "scheduler candidates observed", map[string]any{
-		"candidate_count": len(providerByAuth),
-	})
+	if logger.enabled(logLevelTrace) {
+		logger.log(logLevelTrace, "scheduler candidates observed", map[string]any{
+			"candidate_count": len(providerByAuth),
+		})
+	}
 	return okEnvelope(pluginapi.SchedulerPickResponse{Handled: false})
 }
 
+// interceptRequest decodes only the fields admission needs. pluginapi types carry
+// no JSON tags, so the wire keys are the Go field names; keeping the request body
+// out of this struct avoids a base64 round trip on every request.
+type interceptRequest struct {
+	RequestID string
+	Metadata  map[string]any
+}
+
 func interceptAfter(raw []byte) ([]byte, error) {
-	var req pluginapi.RequestInterceptRequest
+	var req interceptRequest
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return nil, err
 	}
@@ -292,13 +305,13 @@ func interceptAfter(raw []byte) ([]byte, error) {
 				"impact":     "local queue limits are not applied to this request",
 			})
 		}
-		return okEnvelope(pluginapi.RequestInterceptResponse{Headers: req.Headers, Body: req.Body})
+		return emptyInterceptResponse, nil
 	}
 	// The C ABI carries no cancellation context, so max_wait bounds this synchronous admission.
 	if err := manager.acquire(context.Background(), req.RequestID, authID); err != nil {
 		return rejected(http.StatusTooManyRequests, err.Error())
 	}
-	return okEnvelope(pluginapi.RequestInterceptResponse{Headers: req.Headers, Body: req.Body})
+	return emptyInterceptResponse, nil
 }
 
 func complete(raw []byte) ([]byte, error) {
@@ -310,12 +323,11 @@ func complete(raw []byte) ([]byte, error) {
 	return okEnvelope(struct{}{})
 }
 
-func passThrough(raw []byte) ([]byte, error) {
-	var req pluginapi.RequestInterceptRequest
-	if err := json.Unmarshal(raw, &req); err != nil {
-		return nil, err
-	}
-	return okEnvelope(pluginapi.RequestInterceptResponse{Headers: req.Headers, Body: req.Body})
+// passThrough answers without touching the request. An empty RequestInterceptResponse
+// means "no modification" to the host, so echoing headers and body back only cost a
+// base64 round trip through the ABI.
+func passThrough(_ []byte) ([]byte, error) {
+	return emptyInterceptResponse, nil
 }
 
 func metadataString(metadata map[string]any, keys ...string) string {
@@ -340,6 +352,13 @@ func okEnvelope(value any) ([]byte, error) {
 		return nil, err
 	}
 	return json.Marshal(envelope{OK: true, Result: result})
+}
+func mustEnvelope(value any) []byte {
+	raw, err := okEnvelope(value)
+	if err != nil {
+		panic(err)
+	}
+	return raw
 }
 func errorEnvelope(code, message string) []byte {
 	raw, _ := json.Marshal(envelope{OK: false, Error: &envelopeError{Code: code, Message: message}})
