@@ -131,7 +131,7 @@ func cliproxyPluginFree(ptr unsafe.Pointer, _ C.size_t) {
 
 //export cliproxyPluginShutdown
 func cliproxyPluginShutdown() {
-	manager = newQueueManager()
+	manager.reset()
 	logger.setLevel(logLevelInfo)
 	C.cliproxy_store_host_api(nil)
 }
