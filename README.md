@@ -68,6 +68,12 @@ plugins:
 
 The release workflow updates the registry branch and creates a versioned store snapshot tag such as `plugin-store-release/v0.1.0`.
 
+## Operational limits
+
+Admission is a blocking call across the C ABI, so every waiting request holds one host OS thread for as long as it stays queued. Size the configuration accordingly: `credentials x max_queue` is the worst-case thread budget the host must be able to absorb.
+
+A full queue or an expired `max_wait` returns HTTP 429 to the client and terminates the request. CPA does not retry it against another credential, so `max_queue` and `max_wait` decide how much load is absorbed rather than rejected.
+
 ## Build
 
 ```bash
