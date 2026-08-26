@@ -49,6 +49,9 @@ var manager = newQueueManager()
 var logger = newPluginLogger(writeHostLog)
 var pluginVersion = "0.1.0"
 
+// emptyInterceptResponse is the pre-encoded "leave this request untouched" reply.
+var emptyInterceptResponse = mustEnvelope(struct{}{})
+
 type envelope struct {
 	OK     bool            `json:"ok"`
 	Result json.RawMessage `json:"result,omitempty"`
@@ -131,7 +134,7 @@ func cliproxyPluginFree(ptr unsafe.Pointer, _ C.size_t) {
 
 //export cliproxyPluginShutdown
 func cliproxyPluginShutdown() {
-	manager = newQueueManager()
+	manager.reset()
 	logger.setLevel(logLevelInfo)
 	C.cliproxy_store_host_api(nil)
 }
@@ -265,28 +268,50 @@ func schedulerPick(raw []byte) ([]byte, error) {
 		}
 	}
 	manager.rememberCandidates(providerByAuth)
-	logger.log(logLevelTrace, "scheduler candidates observed", map[string]any{
-		"candidate_count": len(providerByAuth),
-	})
+	if logger.enabled(logLevelTrace) {
+		logger.log(logLevelTrace, "scheduler candidates observed", map[string]any{
+			"candidate_count": len(providerByAuth),
+		})
+	}
 	return okEnvelope(pluginapi.SchedulerPickResponse{Handled: false})
 }
 
+// interceptRequest decodes only the fields admission needs. pluginapi types carry
+// no JSON tags, so the wire keys are the Go field names; keeping the request body
+// out of this struct avoids a base64 round trip on every request.
+type interceptRequest struct {
+	RequestID string
+	Metadata  map[string]any
+}
+
 func interceptAfter(raw []byte) ([]byte, error) {
-	var req pluginapi.RequestInterceptRequest
+	var req interceptRequest
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return nil, err
 	}
 	if strings.TrimSpace(req.RequestID) == "" {
 		return nil, fmt.Errorf("request ID is required")
 	}
-	authID := metadataString(req.Metadata, "selected_auth_id", "SelectedAuthMetadataKey")
-	if authID != "" {
-		// The C ABI carries no cancellation context, so max_wait bounds this synchronous admission.
-		if err := manager.acquire(context.Background(), req.RequestID, authID); err != nil {
-			return rejected(http.StatusTooManyRequests, err.Error())
+	authID := metadataString(req.Metadata, "selected_auth_id")
+	if authID == "" {
+		level := logLevelTrace
+		if manager.warnOnce("selected auth id missing", "") {
+			level = logLevelWarn
 		}
+		if logger.enabled(level) {
+			logger.log(level, "request bypassed local queue: host reported no selected credential", map[string]any{
+				"request_id": req.RequestID,
+				"reason":     "selected_auth_id metadata missing",
+				"impact":     "local queue limits are not applied to this request",
+			})
+		}
+		return emptyInterceptResponse, nil
 	}
-	return okEnvelope(pluginapi.RequestInterceptResponse{Headers: req.Headers, Body: req.Body})
+	// The C ABI carries no cancellation context, so max_wait bounds this synchronous admission.
+	if err := manager.acquire(context.Background(), req.RequestID, authID); err != nil {
+		return rejected(http.StatusTooManyRequests, err.Error())
+	}
+	return emptyInterceptResponse, nil
 }
 
 func complete(raw []byte) ([]byte, error) {
@@ -298,12 +323,11 @@ func complete(raw []byte) ([]byte, error) {
 	return okEnvelope(struct{}{})
 }
 
-func passThrough(raw []byte) ([]byte, error) {
-	var req pluginapi.RequestInterceptRequest
-	if err := json.Unmarshal(raw, &req); err != nil {
-		return nil, err
-	}
-	return okEnvelope(pluginapi.RequestInterceptResponse{Headers: req.Headers, Body: req.Body})
+// passThrough answers without touching the request. An empty RequestInterceptResponse
+// means "no modification" to the host, so echoing headers and body back only cost a
+// base64 round trip through the ABI.
+func passThrough(_ []byte) ([]byte, error) {
+	return emptyInterceptResponse, nil
 }
 
 func metadataString(metadata map[string]any, keys ...string) string {
@@ -328,6 +352,13 @@ func okEnvelope(value any) ([]byte, error) {
 		return nil, err
 	}
 	return json.Marshal(envelope{OK: true, Result: result})
+}
+func mustEnvelope(value any) []byte {
+	raw, err := okEnvelope(value)
+	if err != nil {
+		panic(err)
+	}
+	return raw
 }
 func errorEnvelope(code, message string) []byte {
 	raw, _ := json.Marshal(envelope{OK: false, Error: &envelopeError{Code: code, Message: message}})

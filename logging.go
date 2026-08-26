@@ -70,6 +70,14 @@ func (l *pluginLogger) setLevel(level logLevel) {
 	l.mu.Unlock()
 }
 
+// enabled reports whether a log at this level would be emitted, so callers can
+// skip building fields or taking queue snapshots on hot paths.
+func (l *pluginLogger) enabled(level logLevel) bool {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return level <= l.level && l.output != nil
+}
+
 func (l *pluginLogger) log(level logLevel, message string, fields map[string]any) {
 	l.mu.RLock()
 	enabled := level <= l.level

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"reflect"
 	"strings"
 	"testing"
@@ -226,4 +227,74 @@ func interceptResult(t *testing.T, requestID, authID string) pluginapi.RequestIn
 		t.Fatal(err)
 	}
 	return response
+}
+
+func TestInterceptHooksDoNotEchoRequestPayload(t *testing.T) {
+	manager = newQueueManager()
+	configRaw, err := json.Marshal(lifecycleRequest{
+		SchemaVersion: pluginabi.SchemaVersion,
+		ConfigYAML:    []byte("max_concurrency: 1\nrpm: 10\nmax_queue: 0\nmax_wait: 1s\nenabled_providers: [codex]\n"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := handleMethod(pluginabi.MethodPluginReconfigure, configRaw); err != nil {
+		t.Fatal(err)
+	}
+	schedulerRaw, err := json.Marshal(pluginapi.SchedulerPickRequest{Candidates: []pluginapi.SchedulerAuthCandidate{{ID: "auth-a", Provider: "codex"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := handleMethod(pluginabi.MethodSchedulerPick, schedulerRaw); err != nil {
+		t.Fatal(err)
+	}
+
+	requestRaw := func(requestID string) []byte {
+		raw, err := json.Marshal(pluginapi.RequestInterceptRequest{
+			RequestID: requestID,
+			Headers:   http.Header{"X-Test": {"1"}},
+			Body:      []byte(`{"model":"gpt-5"}`),
+			Metadata:  map[string]any{"selected_auth_id": "auth-a"},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+
+	for _, method := range []string{pluginabi.MethodRequestInterceptBefore, pluginabi.MethodRequestInterceptAfter} {
+		responseRaw, err := handleMethod(method, requestRaw("request-a"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var response envelope
+		if err := json.Unmarshal(responseRaw, &response); err != nil {
+			t.Fatal(err)
+		}
+		if !response.OK || string(response.Result) != "{}" {
+			t.Fatalf("%s returned %s, want empty result", method, responseRaw)
+		}
+	}
+
+	rejectedRaw, err := handleMethod(pluginabi.MethodRequestInterceptAfter, requestRaw("request-b"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rejectedEnvelope envelope
+	if err := json.Unmarshal(rejectedRaw, &rejectedEnvelope); err != nil {
+		t.Fatal(err)
+	}
+	var response pluginapi.RequestInterceptResponse
+	if err := json.Unmarshal(rejectedEnvelope.Result, &response); err != nil {
+		t.Fatal(err)
+	}
+	if !response.Terminate || response.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("rejection response: %#v", response)
+	}
+	if got := response.ResponseHeaders.Get("Retry-After"); got != "1" {
+		t.Fatalf("Retry-After: got %q, want %q", got, "1")
+	}
+	if len(response.Body) != 0 || len(response.Headers) != 0 {
+		t.Fatalf("rejection echoed request payload: %#v", response)
+	}
 }
