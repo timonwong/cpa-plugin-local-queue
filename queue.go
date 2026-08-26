@@ -121,6 +121,11 @@ func (q *credentialQueue) acquire(ctx context.Context, requestID string) error {
 		return ErrAborted
 	}
 	if _, ok := q.admitted[requestID]; ok {
+		// Host model fallback retries reuse the request ID after admission. Each
+		// retry is a real upstream call, so it must widen the rpm window, but it
+		// must not take another slot or block: terminating an in-flight fallback
+		// would change the host retry semantics.
+		q.rpm = append(q.rpm, time.Now())
 		q.mu.Unlock()
 		return nil
 	}

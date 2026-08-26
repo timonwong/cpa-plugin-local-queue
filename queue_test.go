@@ -211,6 +211,22 @@ func TestAdmissionWithoutCompletionIsReclaimedAfterTTL(t *testing.T) {
 	}
 }
 
+func TestReAdmittedRequestCountsTowardRPMWithoutTakingASecondSlot(t *testing.T) {
+	q := newCredentialQueue(providerPolicy{MaxConcurrency: 1, RPM: 100, MaxQueue: 1, MaxWait: time.Second})
+	if err := q.acquire(context.Background(), "r1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := q.acquire(context.Background(), "r1"); err != nil {
+		t.Fatal(err)
+	}
+	q.mu.Lock()
+	active, rpm := q.active, len(q.rpm)
+	q.mu.Unlock()
+	if active != 1 || rpm != 2 {
+		t.Fatalf("re-admission: active=%d rpm=%d, want active=1 rpm=2", active, rpm)
+	}
+}
+
 func TestWaiterWokenByDisableIsNeverSilentlyAdmitted(t *testing.T) {
 	q := newCredentialQueue(providerPolicy{MaxConcurrency: 1, RPM: 100, MaxQueue: 1, MaxWait: 2 * time.Second})
 	if err := q.acquire(context.Background(), "r1"); err != nil {
