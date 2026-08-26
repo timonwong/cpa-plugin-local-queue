@@ -143,6 +143,9 @@ func (q *credentialQueue) acquire(ctx context.Context, requestID string) error {
 	q.mu.Unlock()
 	defer deadline.Stop()
 
+	wake := time.NewTimer(q.nextWake(requestID))
+	defer wake.Stop()
+
 	for {
 		select {
 		case <-w.done:
@@ -157,7 +160,7 @@ func (q *credentialQueue) acquire(ctx context.Context, requestID string) error {
 				return result.err()
 			}
 			return ErrWaitTimeout
-		case <-q.nextWake():
+		case <-wake.C:
 			q.mu.Lock()
 			if q.disabled {
 				q.mu.Unlock()
@@ -168,21 +171,28 @@ func (q *credentialQueue) acquire(ctx context.Context, requestID string) error {
 				return nil
 			}
 			q.mu.Unlock()
+			// The timer already fired, so Reset needs no drain.
+			wake.Reset(q.nextWake(requestID))
 		}
 	}
 }
 
-func (q *credentialQueue) nextWake() <-chan time.Time {
+// nextWake reports how long this waiter may sleep before re-checking admission.
+// Only the head waiter can be promoted, so the rest fall back to a slow poll.
+func (q *credentialQueue) nextWake(requestID string) time.Duration {
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	if len(q.queued) > 0 && q.queued[0].requestID != requestID {
+		return time.Second
+	}
 	if len(q.rpm) == 0 || q.policy.RPM <= 0 || len(q.rpm) < q.policy.RPM {
-		return time.After(250 * time.Millisecond)
+		return 250 * time.Millisecond
 	}
 	delay := time.Until(q.rpm[0].Add(time.Minute))
 	if delay < 0 {
 		delay = 0
 	}
-	return time.After(delay)
+	return delay
 }
 
 func (q *credentialQueue) promoteLocked(requestID string) bool {
@@ -292,7 +302,8 @@ func (q *credentialQueue) pruneRPM() {
 		first++
 	}
 	if first > 0 {
-		q.rpm = append([]time.Time(nil), q.rpm[first:]...)
+		n := copy(q.rpm, q.rpm[first:])
+		q.rpm = q.rpm[:n]
 	}
 }
 
@@ -484,31 +495,39 @@ func (m *queueManager) acquire(ctx context.Context, requestID, authID string) er
 	if err := q.acquire(ctx, requestID); err != nil {
 		m.untrack(requestID, authID)
 		if errors.Is(err, ErrAborted) {
-			logger.log(logLevelTrace, "request abandoned before admission", map[string]any{
-				"request_id": requestID,
-				"credential": authID,
-				"provider":   provider,
-				"reason":     "completion arrived before the request was admitted",
-			})
+			if logger.enabled(logLevelTrace) {
+				logger.log(logLevelTrace, "request abandoned before admission", map[string]any{
+					"request_id": requestID,
+					"credential": authID,
+					"provider":   provider,
+					"reason":     "completion arrived before the request was admitted",
+				})
+			}
 			// The host already gave up on this request, so there is no upstream
 			// call to gate; passing through is the safest outcome.
 			return nil
 		}
 		if errors.Is(err, ErrQueueBypass) {
-			logger.log(logLevelTrace, "request bypassed local queue after reconfiguration", map[string]any{
-				"request_id": requestID,
-				"credential": authID,
-				"provider":   provider,
-				"reason":     "provider no longer configured",
-			})
+			if logger.enabled(logLevelTrace) {
+				logger.log(logLevelTrace, "request bypassed local queue after reconfiguration", map[string]any{
+					"request_id": requestID,
+					"credential": authID,
+					"provider":   provider,
+					"reason":     "provider no longer configured",
+				})
+			}
 			return nil
 		}
-		fields := queueLogFields(requestID, authID, provider, q.snapshot())
-		fields["reason"] = err.Error()
-		logger.log(logLevelWarn, "request rejected by local queue", fields)
+		if logger.enabled(logLevelWarn) {
+			fields := queueLogFields(requestID, authID, provider, q.snapshot())
+			fields["reason"] = err.Error()
+			logger.log(logLevelWarn, "request rejected by local queue", fields)
+		}
 		return err
 	}
-	logger.log(logLevelDebug, "request admitted by local queue", queueLogFields(requestID, authID, provider, q.snapshot()))
+	if logger.enabled(logLevelDebug) {
+		logger.log(logLevelDebug, "request admitted by local queue", queueLogFields(requestID, authID, provider, q.snapshot()))
+	}
 	return nil
 }
 
@@ -566,7 +585,9 @@ func (m *queueManager) release(requestID string) {
 		if !item.queue.abort(requestID) {
 			continue
 		}
-		logger.log(logLevelDebug, "request released from local queue", queueLogFields(requestID, item.authID, item.provider, item.queue.snapshot()))
+		if logger.enabled(logLevelDebug) {
+			logger.log(logLevelDebug, "request released from local queue", queueLogFields(requestID, item.authID, item.provider, item.queue.snapshot()))
+		}
 	}
 }
 

@@ -262,6 +262,22 @@ func TestWaiterWokenByDisableIsNeverSilentlyAdmitted(t *testing.T) {
 	}
 }
 
+func TestPruneRPMKeepsRecentTimestampsInOrder(t *testing.T) {
+	q := newCredentialQueue(providerPolicy{MaxConcurrency: 1, RPM: 100, MaxQueue: 1, MaxWait: time.Second})
+	now := time.Now()
+	recent := []time.Time{now.Add(-30 * time.Second), now.Add(-time.Second)}
+	q.rpm = append([]time.Time{now.Add(-3 * time.Minute), now.Add(-2 * time.Minute)}, recent...)
+	q.pruneRPM()
+	if len(q.rpm) != len(recent) {
+		t.Fatalf("rpm window: got %d entries, want %d", len(q.rpm), len(recent))
+	}
+	for i, want := range recent {
+		if !q.rpm[i].Equal(want) {
+			t.Fatalf("rpm[%d]: got %v, want %v", i, q.rpm[i], want)
+		}
+	}
+}
+
 func TestResetClearsStateAndWakesWaiters(t *testing.T) {
 	m := newQueueManager()
 	if err := m.configure(map[string]providerPolicy{"codex": {MaxConcurrency: 1, RPM: 100, MaxQueue: 1, MaxWait: 5 * time.Second}}); err != nil {
